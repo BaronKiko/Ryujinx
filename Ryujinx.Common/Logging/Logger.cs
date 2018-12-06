@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace Ryujinx.Common.Logging
 {
@@ -48,9 +49,51 @@ namespace Ryujinx.Common.Logging
             Print(LogLevel.Debug, Class, GetFormattedMessage(Class, Message, Caller));
         }
 
-        public static void PrintStub(LogClass Class, string Message, [CallerMemberName] string Caller = "")
+        public static void PrintStub(LogClass Class, string Message = "", [CallerMemberName] string Caller = "")
         {
-            Print(LogLevel.Stub, Class, GetFormattedMessage(Class, Message, Caller));
+            Print(LogLevel.Stub, Class, GetFormattedMessage(Class, "Stubbed. " + Message, Caller));
+        }
+
+        public static void PrintStub<T>(LogClass Class, T Obj, [CallerMemberName] string Caller = "")
+        {
+            StringBuilder sb = new StringBuilder();
+
+            sb.Append("Stubbed. ");
+
+            foreach (var Prop in typeof(T).GetProperties())
+            {
+                sb.Append($"{Prop.Name}: {Prop.GetValue(Obj)}");
+                sb.Append(" - ");
+            }
+
+            if (typeof(T).GetProperties().Length > 0)
+            {
+                sb.Remove(sb.Length - 3, 3);
+            }
+
+            Print(LogLevel.Stub, Class, GetFormattedMessage(Class, sb.ToString(), Caller));
+        }
+
+        public static void PrintStub<T>(LogClass Class, string Message, T Obj, [CallerMemberName] string Caller = "")
+        {
+            StringBuilder sb = new StringBuilder();
+
+            sb.Append("Stubbed. ");
+            sb.Append(Message);
+            sb.Append(' ');
+
+            foreach (var Prop in typeof(T).GetProperties())
+            {
+                sb.Append($"{Prop.Name}: {Prop.GetValue(Obj)}");
+                sb.Append(" - ");
+            }
+
+            if (typeof(T).GetProperties().Length > 0)
+            {
+                sb.Remove(sb.Length - 3, 3);
+            }
+
+            Print(LogLevel.Stub, Class, GetFormattedMessage(Class, sb.ToString(), Caller));
         }
 
         public static void PrintInfo(LogClass Class, string Message, [CallerMemberName] string Caller = "")
