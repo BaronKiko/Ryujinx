@@ -120,9 +120,9 @@ namespace ChocolArm64
             {
                 if (_queue.TryDequeue(out TranslatorQueueItem item))
                 {
-                    if (_cache.TryGetSubroutine(item.Position, out TranslatedSub subroutine) &&
-                        item.TranslationCq <= subroutine.TranslationCq &&
-                        item.Priority      != TranslationPriority.Low)
+                    bool isCached = _cache.TryGetSubroutine(item.Position, out TranslatedSub subroutine);
+
+                    if (isCached && item.TranslationCq <= subroutine.TranslationCq)
                     {
                         continue;
                     }
@@ -200,7 +200,7 @@ namespace ChocolArm64
                         callerPos,
                         depth,
                         TranslationPriority.Low,
-                        TranslationCodeQuality.High));
+                        TranslationCodeQuality.Rejit));
                 }
             }
         }
