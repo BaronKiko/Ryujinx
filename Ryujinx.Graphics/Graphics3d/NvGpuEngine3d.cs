@@ -734,7 +734,7 @@ namespace Ryujinx.Graphics.Graphics3d
 
                 long VbPosition = MakeInt64From2xInt32(NvGpuEngine3dReg.VertexArrayNAddress + ArrayIndex * 4);
 
-                if (VbPosition == 0)
+                if (VbPosition == 0 || Vmm.GetPhysicalAddress(VbPosition) <= 0)
                 {
                     continue;
                 }
