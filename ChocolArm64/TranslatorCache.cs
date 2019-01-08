@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -9,8 +8,8 @@ namespace ChocolArm64
 {
     class TranslatorCache
     {
-        //Maximum size of the cache, in bytes, measured in ARM code size.
-        private const int MaxTotalSize = 4 * 1024 * 256;
+        //Maximum size of the cache, the unit used is completely arbitrary.
+        private const int MaxTotalSize = 0x800000;
 
         //Minimum time required in milliseconds for a method to be eligible for deletion.
         private const int MinTimeDelta = 2 * 60000;
@@ -63,10 +62,10 @@ namespace ChocolArm64
         {
             ClearCacheIfNeeded();
 
-            _totalSize += size;
-
             lock (_sortedCache)
             {
+                _totalSize += size;
+
                 LinkedListNode<long> node = _sortedCache.AddLast(position);
 
                 CacheBucket newBucket = new CacheBucket(subroutine, node, size);
@@ -98,11 +97,18 @@ namespace ChocolArm64
                     {
                         try
                         {
-                            bucket.CallCount = 0;
+                            //The bucket value on the dictionary may have changed between the
+                            //time we get the value from the dictionary, and we acquire the
+                            //lock. So we need to ensure we are working with the latest value,
+                            //we can do that by getting the value again, inside the lock.
+                            if (_cache.TryGetValue(position, out CacheBucket latestBucket))
+                            {
+                                latestBucket.CallCount = 0;
 
-                            _sortedCache.Remove(bucket.Node);
+                                _sortedCache.Remove(latestBucket.Node);
 
-                            bucket.UpdateNode(_sortedCache.AddLast(position));
+                                latestBucket.UpdateNode(_sortedCache.AddLast(position));
+                            }
                         }
                         finally
                         {
