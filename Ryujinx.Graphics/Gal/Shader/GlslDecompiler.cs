@@ -188,7 +188,7 @@ namespace Ryujinx.Graphics.Gal.Shader
         {
             if(Decl.ShaderType == GalShaderType.Vertex)
             {
-                SB.AppendLine("#extension GL_AMD_vertex_shader_viewport_index : require");
+                //SB.AppendLine("#extension GL_AMD_vertex_shader_viewport_index : require");
 
                 SB.AppendLine();
             }
@@ -876,7 +876,7 @@ namespace Ryujinx.Graphics.Gal.Shader
                 }
                 else if (Abuf.Offs == GlslDecl.ViewportIdxAttr)
                 {
-                    return "gl_ViewportIndex";
+                    return "//gl_ViewportIndex";
                 }
                 else if (Abuf.Offs == GlslDecl.PointSizeAttr)
                 {
