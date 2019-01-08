@@ -24,6 +24,9 @@ namespace Ryujinx.Graphics.Graphics3d
 
         private ConstBuffer[][] ConstBuffers;
 
+        // Height kept for flipping y axis
+        private int ViewportHeight = 0;
+
         private int CurrentInstance = 0;
 
         public NvGpuEngine3d(NvGpu Gpu)
@@ -97,6 +100,7 @@ namespace Ryujinx.Graphics.Graphics3d
             SetCullFace(State);
             SetDepth(State);
             SetStencil(State);
+            SetScissor(State);
             SetBlending(State);
             SetColorMask(State);
             SetPrimitiveRestart(State);
@@ -207,6 +211,8 @@ namespace Ryujinx.Graphics.Graphics3d
             GalImage Image = new GalImage(Width, Height, 1, GobBlockHeight, Layout, Format);
 
             Gpu.ResourceManager.SendColorBuffer(Vmm, Key, FbIndex, Image);
+
+            ViewportHeight = VpH;
 
             Gpu.Renderer.RenderTarget.SetViewport(FbIndex, VpX, VpY, VpW, VpH);
         }
@@ -404,6 +410,36 @@ namespace Ryujinx.Graphics.Graphics3d
                 State.StencilFrontOpZFail  =    (GalStencilOp)ReadRegister(NvGpuEngine3dReg.StencilFrontOpZFail);
                 State.StencilFrontOpZPass  =    (GalStencilOp)ReadRegister(NvGpuEngine3dReg.StencilFrontOpZPass);
                 State.StencilFrontMask     =            (uint)ReadRegister(NvGpuEngine3dReg.StencilFrontMask);
+            }
+        }
+
+        private void SetScissor(GalPipelineState State)
+        {
+            // FIXME: Stubbed, only the first scissor test is valid without a geometry shader loaded. At time of writing geometry shaders are also stubbed.
+            // Once geometry shaders are fixed it should be equal to GalPipelineState.RenderTargetCount when shader loaded, otherwise equal to 1
+            State.ScissorTestCount = 1;
+
+            for (int Index = 0; Index < GalPipelineState.RenderTargetsCount; Index++)
+            {
+                State.ScissorTestEnabled[Index] = ReadRegisterBool(NvGpuEngine3dReg.ScissorEnable + Index * 4);
+
+                if (State.ScissorTestEnabled[Index])
+                {
+                    uint ScissorHorizontal        = (uint)ReadRegister(NvGpuEngine3dReg.ScissorHorizontal + Index * 4);
+                    uint ScissorVertical          = (uint)ReadRegister(NvGpuEngine3dReg.ScissorVertical + Index * 4);
+
+                    State.ScissorTestX[Index]     = (int)((ScissorHorizontal & 0xFFFF) * State.FlipX);                          // X, lower 16 bits
+                    State.ScissorTestWidth[Index] = (int)((ScissorHorizontal >> 16) * State.FlipX) - State.ScissorTestX[Index]; // Width, right side is upper 16 bits
+
+                    State.ScissorTestY[Index]      = (int)((ScissorVertical & 0xFFFF));                                         // Y, lower 16 bits
+                    State.ScissorTestHeight[Index] = (int)((ScissorVertical >> 16)) - State.ScissorTestY[Index];                // Height, top side is upper 16 bits
+
+                    // Y coordinates may have to be flipped
+                    if ((int)State.FlipY == -1)
+                    {
+                        State.ScissorTestY[Index] = ViewportHeight - State.ScissorTestY[Index] - State.ScissorTestHeight[Index];
+                    }
+                }
             }
         }
 
@@ -691,11 +727,11 @@ namespace Ryujinx.Graphics.Graphics3d
 
                         if (PrimType == GalPrimitiveType.Quads)
                         {
-                            Buffer = QuadHelper.ConvertIbQuadsToTris(Buffer, IndexEntrySize, IndexCount);
+                            Buffer = QuadHelper.ConvertQuadsToTris(Buffer, IndexEntrySize, IndexCount);
                         }
                         else /* if (PrimType == GalPrimitiveType.QuadStrip) */
                         {
-                            Buffer = QuadHelper.ConvertIbQuadStripToTris(Buffer, IndexEntrySize, IndexCount);
+                            Buffer = QuadHelper.ConvertQuadStripToTris(Buffer, IndexEntrySize, IndexCount);
                         }
 
                         Gpu.Renderer.Rasterizer.CreateIbo(IboKey, IbSize, Buffer);
@@ -710,11 +746,11 @@ namespace Ryujinx.Graphics.Graphics3d
                 {
                     if (PrimType == GalPrimitiveType.Quads)
                     {
-                        Gpu.Renderer.Rasterizer.SetIndexArray(QuadHelper.ConvertIbSizeQuadsToTris(IbSize), IndexFormat);
+                        Gpu.Renderer.Rasterizer.SetIndexArray(QuadHelper.ConvertSizeQuadsToTris(IbSize), IndexFormat);
                     }
                     else /* if (PrimType == GalPrimitiveType.QuadStrip) */
                     {
-                        Gpu.Renderer.Rasterizer.SetIndexArray(QuadHelper.ConvertIbSizeQuadStripToTris(IbSize), IndexFormat);
+                        Gpu.Renderer.Rasterizer.SetIndexArray(QuadHelper.ConvertSizeQuadStripToTris(IbSize), IndexFormat);
                     }
                 }
             }
@@ -733,6 +769,11 @@ namespace Ryujinx.Graphics.Graphics3d
                 }
 
                 long VbPosition = MakeInt64From2xInt32(NvGpuEngine3dReg.VertexArrayNAddress + ArrayIndex * 4);
+
+                if (VbPosition == 0)
+                {
+                    continue;
+                }
 
                 bool IsConst = ((Packed >> 6) & 1) != 0;
 
@@ -791,12 +832,42 @@ namespace Ryujinx.Graphics.Graphics3d
                 long VboKey = Vmm.GetPhysicalAddress(VbPosition);
 
                 long VbSize = (VbEndPos - VbPosition) + 1;
+                int ModifiedVbSize = (int)VbSize;
 
-                bool VboCached = Gpu.Renderer.Rasterizer.IsVboCached(VboKey, VbSize);
+
+                // If quads convert size to triangle length
+                if (Stride == 0)
+                {
+                    if (PrimType == GalPrimitiveType.Quads)
+                    {
+                        ModifiedVbSize = QuadHelper.ConvertSizeQuadsToTris(ModifiedVbSize);
+                    }
+                    else if (PrimType == GalPrimitiveType.QuadStrip)
+                    {
+                        ModifiedVbSize = QuadHelper.ConvertSizeQuadStripToTris(ModifiedVbSize);
+                    }
+                }
+
+                bool VboCached = Gpu.Renderer.Rasterizer.IsVboCached(VboKey, ModifiedVbSize);
 
                 if (!VboCached || Gpu.ResourceManager.MemoryRegionModified(Vmm, VboKey, VbSize, NvGpuBufferType.Vertex))
                 {
-                    if (Vmm.TryGetHostAddress(VbPosition, VbSize, out IntPtr VbPtr))
+                    if ((PrimType == GalPrimitiveType.Quads | PrimType == GalPrimitiveType.QuadStrip) && Stride != 0)
+                    {
+                        // Convert quad buffer to triangles
+                        byte[] data = Vmm.ReadBytes(VbPosition, VbSize);
+
+                        if (PrimType == GalPrimitiveType.Quads)
+                        {
+                            data = QuadHelper.ConvertQuadsToTris(data, Stride, (int)(VbSize / Stride));
+                        }
+                        else
+                        {
+                            data = QuadHelper.ConvertQuadStripToTris(data, Stride, (int)(VbSize / Stride));
+                        }
+                        Gpu.Renderer.Rasterizer.CreateVbo(VboKey, data);
+                    }
+                    else if (Vmm.TryGetHostAddress(VbPosition, VbSize, out IntPtr VbPtr))
                     {
                         Gpu.Renderer.Rasterizer.CreateVbo(VboKey, (int)VbSize, VbPtr);
                     }
@@ -858,22 +929,21 @@ namespace Ryujinx.Graphics.Graphics3d
                 //Quad primitive types were deprecated on OpenGL 3.x,
                 //they are converted to a triangles index buffer on IB creation,
                 //so we should use the triangles type here too.
-                if (PrimType == GalPrimitiveType.Quads ||
-                    PrimType == GalPrimitiveType.QuadStrip)
+                if (PrimType == GalPrimitiveType.Quads || PrimType == GalPrimitiveType.QuadStrip)
                 {
-                    PrimType = GalPrimitiveType.Triangles;
-
                     //Note: We assume that index first points to the first
                     //vertex of a quad, if it points to the middle of a
                     //quad (First % 4 != 0 for Quads) then it will not work properly.
                     if (PrimType == GalPrimitiveType.Quads)
                     {
-                        IndexFirst = QuadHelper.ConvertIbSizeQuadsToTris(IndexFirst);
+                        IndexFirst = QuadHelper.ConvertSizeQuadsToTris(IndexFirst);
                     }
-                    else /* if (PrimType == GalPrimitiveType.QuadStrip) */
+                    else // QuadStrip
                     {
-                        IndexFirst = QuadHelper.ConvertIbSizeQuadStripToTris(IndexFirst);
+                        IndexFirst = QuadHelper.ConvertSizeQuadStripToTris(IndexFirst);
                     }
+
+                    PrimType = GalPrimitiveType.Triangles;
                 }
 
                 Gpu.Renderer.Rasterizer.DrawElements(IboKey, IndexFirst, VertexBase, PrimType);
@@ -882,6 +952,27 @@ namespace Ryujinx.Graphics.Graphics3d
             {
                 int VertexFirst = ReadRegister(NvGpuEngine3dReg.VertexArrayFirst);
                 int VertexCount = ReadRegister(NvGpuEngine3dReg.VertexArrayCount);
+
+                //Quad primitive types were deprecated on OpenGL 3.x,
+                //they are converted to a triangles index buffer on IB creation,
+                //so we should use the triangles type here too.
+                if (PrimType == GalPrimitiveType.Quads || PrimType == GalPrimitiveType.QuadStrip)
+                {
+                    //Note: We assume that index first points to the first
+                    //vertex of a quad, if it points to the middle of a
+                    //quad (First % 4 != 0 for Quads) then it will not work properly.
+                    if (PrimType == GalPrimitiveType.Quads)
+                    {
+                        VertexFirst = QuadHelper.ConvertSizeQuadsToTris(VertexFirst);
+                    }
+                    else // QuadStrip
+                    {
+                        VertexFirst = QuadHelper.ConvertSizeQuadStripToTris(VertexFirst);
+                    }
+
+                    PrimType = GalPrimitiveType.Triangles;
+                    VertexCount = QuadHelper.ConvertSizeQuadsToTris(VertexCount);
+                }
 
                 Gpu.Renderer.Rasterizer.DrawArrays(VertexFirst, VertexCount, PrimType);
             }
