@@ -10,6 +10,7 @@ namespace ChocolArm64.Decoders
         public int  RawOpCode { get; private set; }
 
         public InstEmitter     Emitter      { get; protected set; }
+        public InstEmitter86   Emitter86    { get; protected set; }
         public InstInterpreter Interpreter  { get; protected set; }
         public RegisterSize    RegisterSize { get; protected set; }
 
@@ -21,6 +22,7 @@ namespace ChocolArm64.Decoders
             RegisterSize = RegisterSize.Int64;
 
             Emitter     = inst.Emitter;
+            Emitter86   = inst.Emitter86;
             Interpreter = inst.Interpreter;
         }
 

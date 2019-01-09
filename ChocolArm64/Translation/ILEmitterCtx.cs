@@ -98,6 +98,7 @@ namespace ChocolArm64.Translation
             }
 
             CurrOp.Emitter(this);
+            CurrOp.Emitter86(this);
 
             _ilBlock.Add(new ILBarrier());
         }
