@@ -1,4 +1,5 @@
 using Ryujinx.Graphics.Gal;
+using Ryujinx.Graphics.Gal.OpenGL;
 using Ryujinx.Graphics.Memory;
 using Ryujinx.Graphics.Texture;
 using Ryujinx.Profiler;
@@ -50,7 +51,10 @@ namespace Ryujinx.Graphics.Graphics3d
             int  dstWidth  = ReadRegister(NvGpuEngine2dReg.DstWidth);
             int  dstHeight = ReadRegister(NvGpuEngine2dReg.DstHeight);
             int  dstDepth  = ReadRegister(NvGpuEngine2dReg.DstDepth);
-            int  dstLayer  = ReadRegister(NvGpuEngine2dReg.DstLayer);
+
+            // No idea what this register is used for. It should be the total number of layers however that's useless to us as the texture cache will handle that for us. Same for srcLayer
+            int dstLayer   = ReadRegister(NvGpuEngine2dReg.DstLayer);
+
             int  dstPitch  = ReadRegister(NvGpuEngine2dReg.DstPitch);
             int  dstBlkDim = ReadRegister(NvGpuEngine2dReg.DstBlockDimensions);
 
@@ -89,35 +93,6 @@ namespace Ryujinx.Graphics.Graphics3d
             long srcKey = vmm.GetPhysicalAddress(srcAddress);
             long dstKey = vmm.GetPhysicalAddress(dstAddress);
 
-            bool isSrcLayered = false;
-            bool isDstLayered = false;
-
-            GalTextureTarget srcTarget = GalTextureTarget.TwoD;
-
-            if (srcDepth != 0)
-            {
-                srcTarget = GalTextureTarget.TwoDArray;
-                srcDepth++;
-                isSrcLayered = true;
-            }
-            else
-            {
-                srcDepth = 1;
-            }
-
-            GalTextureTarget dstTarget = GalTextureTarget.TwoD;
-
-            if (dstDepth != 0)
-            {
-                dstTarget = GalTextureTarget.TwoDArray;
-                dstDepth++;
-                isDstLayered = true;
-            }
-            else
-            {
-                dstDepth = 1;
-            }
-
             GalImage srcTexture = new GalImage(
                 srcWidth,
                 srcHeight,
@@ -125,7 +100,7 @@ namespace Ryujinx.Graphics.Graphics3d
                 srcBlockHeight, 1,
                 srcLayout,
                 srcImgFormat,
-                srcTarget);
+                GalTextureTarget.TwoD);
 
             GalImage dstTexture = new GalImage(
                 dstWidth,
@@ -134,53 +109,16 @@ namespace Ryujinx.Graphics.Graphics3d
                 dstBlockHeight, 1,
                 dstLayout,
                 dstImgFormat,
-                dstTarget);
+                GalTextureTarget.TwoD);
+
+            int srcSize = srcTexture.Size;
+            int dstSize = dstTexture.Size;
 
             srcTexture.Pitch = srcPitch;
             dstTexture.Pitch = dstPitch;
 
-            long GetLayerOffset(GalImage image, int layer)
-            {
-                int targetMipLevel = image.MaxMipmapLevel <= 1 ? 1 : image.MaxMipmapLevel - 1;
-                return ImageUtils.GetLayerOffset(image, targetMipLevel) * layer;
-            }
-
-            int srcLayerIndex = -1;
-
-            if (isSrcLayered && _gpu.ResourceManager.TryGetTextureLayer(srcKey, out srcLayerIndex) && srcLayerIndex != 0)
-            {
-                srcKey = srcKey - GetLayerOffset(srcTexture, srcLayerIndex);
-            }
-
-            int dstLayerIndex = -1;
-
-            if (isDstLayered && _gpu.ResourceManager.TryGetTextureLayer(dstKey, out dstLayerIndex) && dstLayerIndex != 0)
-            {
-                dstKey = dstKey - GetLayerOffset(dstTexture, dstLayerIndex);
-            }
-
-            _gpu.ResourceManager.SendTexture(vmm, srcKey, srcTexture);
-            _gpu.ResourceManager.SendTexture(vmm, dstKey, dstTexture);
-
-            if (isSrcLayered && srcLayerIndex == -1)
-            {
-                for (int layer = 0; layer < srcTexture.LayerCount; layer++)
-                {
-                    _gpu.ResourceManager.SetTextureArrayLayer(srcKey + GetLayerOffset(srcTexture, layer), layer);
-                }
-
-                srcLayerIndex = 0;
-            }
-
-            if (isDstLayered && dstLayerIndex == -1)
-            {
-                for (int layer = 0; layer < dstTexture.LayerCount; layer++)
-                {
-                    _gpu.ResourceManager.SetTextureArrayLayer(dstKey + GetLayerOffset(dstTexture, layer), layer);
-                }
-
-                dstLayerIndex = 0;
-            }
+            _gpu.ResourceManager.SendTexture(vmm, new TextureKey(srcKey, srcSize, GalTextureTarget.TwoD), srcTexture);
+            _gpu.ResourceManager.SendTexture(vmm, new TextureKey(dstKey, dstSize, GalTextureTarget.TwoD), dstTexture);
 
             int srcBlitX1 = (int)(srcBlitX >> 32);
             int srcBlitY1 = (int)(srcBlitY >> 32);
@@ -192,9 +130,9 @@ namespace Ryujinx.Graphics.Graphics3d
                 srcTexture,
                 dstTexture,
                 srcKey,
+                srcSize,
                 dstKey,
-                srcLayerIndex,
-                dstLayerIndex,
+                dstSize,
                 srcBlitX1,
                 srcBlitY1,
                 srcBlitX2,

@@ -1,10 +1,11 @@
+using System;
+using System.Collections.Generic;
 using Ryujinx.Common;
 using Ryujinx.Graphics.Gal;
 using Ryujinx.Graphics.Memory;
 using Ryujinx.Graphics.Shader;
 using Ryujinx.Graphics.Texture;
-using System;
-using System.Collections.Generic;
+using Ryujinx.Graphics.Gal.OpenGL;
 using Ryujinx.Profiler;
 
 namespace Ryujinx.Graphics.Graphics3d
@@ -222,16 +223,31 @@ namespace Ryujinx.Graphics.Graphics3d
                 return;
             }
 
-            long key = vmm.GetPhysicalAddress(va);
-
             int width  = ReadRegister(NvGpuEngine3dReg.FrameBufferNWidth  + fbIndex * 0x10);
             int height = ReadRegister(NvGpuEngine3dReg.FrameBufferNHeight + fbIndex * 0x10);
+            int depth  = 1;
 
             int arrayMode   = ReadRegister(NvGpuEngine3dReg.FrameBufferNArrayMode + fbIndex * 0x10);
-            int layerCount  = arrayMode & 0xFFFF;
-            int layerStride = ReadRegister(NvGpuEngine3dReg.FrameBufferNLayerStride + fbIndex * 0x10);
+
+            // Get stride in bytes, register is in dwords
+            int layerStride = ReadRegister(NvGpuEngine3dReg.FrameBufferNLayerStride + fbIndex * 0x10) * 4;
             int baseLayer   = ReadRegister(NvGpuEngine3dReg.FrameBufferNBaseLayer + fbIndex * 0x10);
-            int blockDim    = ReadRegister(NvGpuEngine3dReg.FrameBufferNBlockDim + fbIndex * 0x10);
+
+            int layerCount = (arrayMode & 0x7FFF);
+            bool isVolume = ((arrayMode >> 15) & 1) == 1;
+
+            GalTextureTarget target = GalTextureTarget.TwoD;
+
+            if (isVolume)
+            {
+                depth      = layerCount;
+                layerCount = 1;
+                target     = GalTextureTarget.ThreeD;
+            }
+
+            long key = vmm.GetPhysicalAddress(va) + baseLayer * layerStride;
+
+            int blockDim = ReadRegister(NvGpuEngine3dReg.FrameBufferNBlockDim + fbIndex * 0x10);
 
             int gobBlockHeight = 1 << ((blockDim >> 4) & 7);
 
@@ -251,9 +267,9 @@ namespace Ryujinx.Graphics.Graphics3d
 
             GalImageFormat format = ImageUtils.ConvertSurface((GalSurfaceFormat)surfFormat);
 
-            GalImage image = new GalImage(width, height, 1, 1, 1, gobBlockHeight, 1, layout, format, GalTextureTarget.TwoD);
+            GalImage image = new GalImage(width, height, depth, 1, 1, gobBlockHeight, 1, layout, format, target);
 
-            _gpu.ResourceManager.SendColorBuffer(vmm, key, fbIndex, image);
+            _gpu.ResourceManager.SendColorBuffer(vmm, new TextureKey(key, image.Size, target), fbIndex, image);
 
             _gpu.Renderer.RenderTarget.SetViewport(fbIndex, _viewportX0, _viewportY0, _viewportX1 - _viewportX0, _viewportY1 - _viewportY0);
 
@@ -285,12 +301,6 @@ namespace Ryujinx.Graphics.Graphics3d
 
             int zetaFormat = ReadRegister(NvGpuEngine3dReg.ZetaFormat);
 
-            int blockDim = ReadRegister(NvGpuEngine3dReg.ZetaBlockDimensions);
-
-            int gobBlockHeight = 1 << ((blockDim >> 4) & 7);
-
-            GalMemoryLayout layout = (GalMemoryLayout)((blockDim >> 12) & 1); //?
-
             bool zetaEnable = ReadRegisterBool(NvGpuEngine3dReg.ZetaEnable);
 
             if (va == 0 || zetaFormat == 0 || !zetaEnable)
@@ -301,18 +311,41 @@ namespace Ryujinx.Graphics.Graphics3d
 
                 return;
             }
+            int blockDim = ReadRegister(NvGpuEngine3dReg.ZetaBlockDimensions);
 
-            long key = vmm.GetPhysicalAddress(va);
+            int gobBlockHeight = 1 << ((blockDim >> 4) & 7);
+
+            GalMemoryLayout layout = (GalMemoryLayout)((blockDim >> 12) & 1);
 
             int width  = ReadRegister(NvGpuEngine3dReg.ZetaHoriz);
             int height = ReadRegister(NvGpuEngine3dReg.ZetaVert);
+            int depth = 1;
+
+            int arrayMode = ReadRegister(NvGpuEngine3dReg.ZetaArrayMode);
+
+            // Get stride in bytes, register is in dwords
+            int layerStride = ReadRegister(NvGpuEngine3dReg.ZetaLayerStride) * 4;
+            int baseLayer = ReadRegister(NvGpuEngine3dReg.ZetaBaseLayer);
+
+            int layerCount = (arrayMode & 0x7FFF);
+            bool isVolume = ((arrayMode >> 15) & 1) == 1;
+
+            GalTextureTarget target = GalTextureTarget.TwoD;
+
+            if (isVolume)
+            {
+                depth = layerCount;
+                layerCount = 1;
+                target = GalTextureTarget.ThreeD;
+            }
+
+            long key = vmm.GetPhysicalAddress(va) + baseLayer * layerStride;
 
             GalImageFormat format = ImageUtils.ConvertZeta((GalZetaFormat)zetaFormat);
 
-            // TODO: Support non 2D?
-            GalImage image = new GalImage(width, height, 1, 1, 1, gobBlockHeight, 1, layout, format, GalTextureTarget.TwoD);
+            GalImage image = new GalImage(width, height, depth, layerCount, 1, gobBlockHeight, 1, layout, format, target);
 
-            _gpu.ResourceManager.SendZetaBuffer(vmm, key, image);
+            _gpu.ResourceManager.SendZetaBuffer(vmm, new TextureKey(key, image.Size, target), image);
 
             Profile.End(Profiles.GPU.Engine3d.SetZeta);
         }
@@ -666,7 +699,7 @@ namespace Ryujinx.Graphics.Graphics3d
 
             int textureCbIndex = ReadRegister(NvGpuEngine3dReg.TextureCbIndex);
 
-            List<(long, GalImage, GalTextureSampler)> unboundTextures = new List<(long, GalImage, GalTextureSampler)>();
+            List<(ImageHandler, GalTextureSampler)> unboundTextures = new List<(ImageHandler, GalTextureSampler)>();
 
             for (int index = 0; index < keys.Length; index++)
             {
@@ -693,27 +726,27 @@ namespace Ryujinx.Graphics.Graphics3d
 
             for (int index = 0; index < unboundTextures.Count; index++)
             {
-                (long key, GalImage image, GalTextureSampler sampler) = unboundTextures[index];
+                (ImageHandler handler, GalTextureSampler sampler) = unboundTextures[index];
 
-                if (key == 0)
+                if (handler == null)
                 {
                     continue;
                 }
 
-                _gpu.Renderer.Texture.Bind(key, index, image);
-                _gpu.Renderer.Texture.SetSampler(image, sampler);
+                _gpu.Renderer.Texture.Bind(index, handler);
+                _gpu.Renderer.Texture.SetSampler(handler.TopLevelImage, sampler);
             }
 
             Profile.End(Profiles.GPU.Engine3d.UploadTextures);
         }
 
-        private (long, GalImage, GalTextureSampler) UploadTexture(NvGpuVmm vmm, int textureHandle)
+        private (ImageHandler, GalTextureSampler) UploadTexture(NvGpuVmm vmm, int textureHandle)
         {
             if (textureHandle == 0)
             {
                 //FIXME: Some games like puyo puyo will use handles with the value 0.
                 //This is a bug, most likely caused by sync issues.
-                return (0, default(GalImage), default(GalTextureSampler));
+                //return (null, default(GalTextureSampler));
             }
 
             Profile.Begin(Profiles.GPU.Engine3d.UploadTexture);
@@ -752,14 +785,14 @@ namespace Ryujinx.Graphics.Graphics3d
                 Profile.End(Profiles.GPU.Engine3d.UploadTexture);
 
                 //FIXME: Shouldn't ignore invalid addresses.
-                return (0, default(GalImage), default(GalTextureSampler));
+                return (null, default(GalTextureSampler));
             }
 
-            _gpu.ResourceManager.SendTexture(vmm, key, image);
+            ImageHandler handler = _gpu.ResourceManager.SendTexture(vmm, new TextureKey(key, image.Size, image.TextureTarget), image);
 
             Profile.End(Profiles.GPU.Engine3d.UploadTexture);
 
-            return (key, image, sampler);
+            return (handler, sampler);
         }
 
         private void UploadConstBuffers(NvGpuVmm vmm, GalPipelineState state, long[] keys)

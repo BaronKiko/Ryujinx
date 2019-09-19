@@ -80,6 +80,7 @@ namespace Ryujinx.Graphics.Graphics3d
         VertexBeginGl           = 0x586,
         PrimRestartEnable       = 0x591,
         PrimRestartIndex        = 0x592,
+        ZetaBaseLayer           = 0x5E7,
         IndexArrayAddress       = 0x5f2,
         IndexArrayEndAddr       = 0x5f4,
         IndexArrayFormat        = 0x5f6,

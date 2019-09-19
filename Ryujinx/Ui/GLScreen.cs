@@ -8,8 +8,10 @@ using Ryujinx.Profiler;
 using Ryujinx.Profiler.UI;
 using System;
 using System.Threading;
-
+using OpenTK.Graphics.OpenGL4;
 using Stopwatch = System.Diagnostics.Stopwatch;
+using System.Runtime.InteropServices;
+using Ryujinx.Common.Logging;
 
 namespace Ryujinx
 {
@@ -46,8 +48,9 @@ namespace Ryujinx
             : base(1280, 720,
             new GraphicsMode(), "Ryujinx", 0,
             DisplayDevice.Default, 3, 3,
-            GraphicsContextFlags.ForwardCompatible)
+            GraphicsContextFlags.Debug)
         {
+            setupDebugOutput();
             _device   = device;
             _renderer = renderer;
 
@@ -59,6 +62,65 @@ namespace Ryujinx
             // Start profile window, it will handle itself from there
             _profileWindow = new ProfileWindowManager();
 #endif
+        }
+
+        private static DebugProc openGLDebugDelegate;
+        private static void setupDebugOutput()
+        {
+#if !DEBUG
+            return;
+#endif
+            Console.WriteLine("\nenabling openGL debug output");
+
+            GL.Enable(EnableCap.DebugOutput);
+            GL.Enable(EnableCap.DebugOutputSynchronous);
+
+            openGLDebugDelegate = new DebugProc(openGLDebugCallback);
+
+            GL.DebugMessageCallback(openGLDebugDelegate, IntPtr.Zero);
+            GL.DebugMessageControl(DebugSourceControl.DontCare, DebugTypeControl.DontCare, DebugSeverityControl.DontCare, 0, new int[0], true);
+            CheckError("setting up debug output");
+
+            GL.DebugMessageInsert(DebugSourceExternal.DebugSourceApplication, DebugType.DebugTypeMarker, 0, DebugSeverity.DebugSeverityNotification, -1, "Debug output enabled");
+            CheckError("testing debug output");
+        }
+
+        private static void openGLDebugCallback(DebugSource source, DebugType type, int id, DebugSeverity severity,
+            int length, IntPtr message, IntPtr userParam)
+        {
+            string output = source == DebugSource.DebugSourceApplication
+                ? $"openGL - {Marshal.PtrToStringAnsi(message, length)}"
+                : $"openGL - {Marshal.PtrToStringAnsi(message, length)}\n\tid:{id} severity:{severity} type:{type} source:{source}\n";
+
+            if (severity == DebugSeverity.DebugSeverityMedium)
+            {
+                Logger.PrintWarning(LogClass.Gpu, output);
+            }
+            else if (severity == DebugSeverity.DebugSeverityHigh)
+            {
+                if (id == 1286)
+                {
+                    output = $"{output} Draw Status: {GL.CheckFramebufferStatus(FramebufferTarget.DrawFramebuffer)} Read Status: {GL.CheckFramebufferStatus(FramebufferTarget.ReadFramebuffer)}\n";
+                }
+
+                Logger.PrintWarning(LogClass.Gpu, output);
+            }
+            else
+            {
+                Logger.PrintDebug(LogClass.Gpu,
+                    source == DebugSource.DebugSourceApplication
+                        ? $"openGL - {Marshal.PtrToStringAnsi(message, length)}"
+                        : $"openGL - {Marshal.PtrToStringAnsi(message, length)}\n\tid:{id} severity:{severity} type:{type} source:{source}\n");
+            }
+        }
+
+        public static void CheckError(string context = null, bool alwaysThrow = false)
+        {
+            var error = GL.GetError();
+            if (alwaysThrow || error != ErrorCode.NoError)
+                throw new Exception(
+                    (context != null ? "openGL error while " + context : "openGL error") +
+                    (error != ErrorCode.NoError ? ": " + error.ToString() : string.Empty));
         }
 
         private void RenderLoop()

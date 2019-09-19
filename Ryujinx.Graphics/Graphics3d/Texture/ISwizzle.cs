@@ -8,6 +8,10 @@ namespace Ryujinx.Graphics.Texture
 
         int GetMipOffset(int level);
 
+        int[] GetMipOffsets(int maxLevel);
+
+        (int, int, int)[] GetMipDimensions(int maxLevel);
+
         int GetImageSize(int mipsCount);
     }
 }

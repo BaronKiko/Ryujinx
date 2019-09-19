@@ -86,22 +86,43 @@ namespace Ryujinx.Graphics.Texture
 
         public int GetMipOffset(int level)
         {
-            int totalSize = 0;
+            return (level == 0) ? 0 : GetMipOffsets(level)[level];
+        }
 
-            for (int index = 0; index < level; index++)
+        public int[] GetMipOffsets(int maxLevel)
+        {
+            int[] sizes = new int[Math.Max(maxLevel, 1) + 1];
+
+            (int, int, int)[] dimensions = GetMipDimensions(maxLevel);
+
+            sizes[0] = 0;
+
+            for (int index = 0; index < maxLevel; index++)
             {
-                int width  = Math.Max(1, _texWidth  >> index);
-                int height = Math.Max(1, _texHeight >> index);
-                int depth  = Math.Max(1, _texDepth  >> index);
+                int width  = dimensions[index].Item1;
+                int height = dimensions[index].Item2;
+                int depth  = dimensions[index].Item3;
 
                 GobBlockSizes gbSizes = AdjustGobBlockSizes(height, depth);
 
                 RobAndSliceSizes rsSizes = GetRobAndSliceSizes(width, height, gbSizes);
 
-                totalSize += BitUtils.DivRoundUp(depth, gbSizes.Depth) * rsSizes.SliceSize;
+                sizes[index + 1] = sizes[index] + BitUtils.DivRoundUp(depth, gbSizes.Depth) * rsSizes.SliceSize;
             }
 
-            return totalSize;
+            return sizes;
+        }
+
+        public (int, int, int)[] GetMipDimensions(int maxLevel)
+        {
+            (int, int, int)[] sizes = new (int, int, int)[Math.Max(maxLevel, 1)];
+
+            for (int index = 0; index < maxLevel; index++)
+            {
+                sizes[index] = (Math.Max(1, _texWidth >> index), Math.Max(1, _texHeight >> index), Math.Max(1, _texDepth >> index));
+            }
+
+            return sizes;
         }
 
         private struct GobBlockSizes

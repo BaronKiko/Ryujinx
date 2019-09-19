@@ -21,7 +21,7 @@ namespace Ryujinx.Graphics.Texture
 
             TextureSwizzle swizzle = (TextureSwizzle)((tic[2] >> 21) & 7);
 
-            int maxMipmapLevel = (tic[3] >> 28) & 0xF + 1;
+            int maxMipmapLevel = ((tic[3] >> 28) & 0xF) + 1;
 
             GalMemoryLayout layout;
 

@@ -24,6 +24,43 @@ namespace Ryujinx.Graphics.Gal
         public GalTextureSource WSource;
         public GalTextureTarget TextureTarget;
 
+        public int Size
+        {
+            get
+            {
+                if (size == 0)
+                {
+                    size = LayerStride * LayerCount;
+                }
+
+                return size;
+            }
+
+            set
+            {
+                size = value;
+                LayerStride = value / LayerCount;
+            }
+        }
+
+        public int LayerStride
+        {
+            get
+            {
+                if (layerStride == 0)
+                {
+                    layerStride = ImageUtils.GetLayerStride(this);
+                }
+
+                return layerStride;
+            }
+
+            private set { layerStride = value; }
+        }
+
+        // Private backing variables
+        private int size, layerStride;
+
         public GalImage(
             int              width,
             int              height,
@@ -56,6 +93,8 @@ namespace Ryujinx.Graphics.Gal
             ZSource        = zSource;
             WSource        = wSource;
             TextureTarget  = textureTarget;
+            size           = 0;
+            layerStride    = 0;
 
             Pitch = ImageUtils.GetPitch(format, width);
         }

@@ -4,13 +4,16 @@ using Ryujinx.Graphics.Gal;
 using Ryujinx.Graphics.Memory;
 using System;
 using System.Collections.Generic;
+using Ryujinx.Common;
+using Ryujinx.Graphics.Gal.OpenGL;
+using Ryujinx.Common.Logging;
 
 namespace Ryujinx.Graphics.Texture
 {
     public static class ImageUtils
     {
         [Flags]
-        private enum TargetBuffer
+        public enum TargetBuffer
         {
             Color   = 1 << 0,
             Depth   = 1 << 1,
@@ -19,7 +22,7 @@ namespace Ryujinx.Graphics.Texture
             DepthStencil = Depth | Stencil
         }
 
-        private struct ImageDescriptor
+        public struct ImageDescriptor
         {
             public int BytesPerPixel { get; private set; }
             public int BlockWidth    { get; private set; }
@@ -227,7 +230,7 @@ namespace Ryujinx.Graphics.Texture
             throw new NotImplementedException(format.ToString());
         }
 
-        public static byte[] ReadTexture(IMemory memory, GalImage image, long position)
+        public static byte[][] ReadTexture(IMemory memory, GalImage image, long position)
         {
             MemoryManager cpuMemory;
 
@@ -237,42 +240,59 @@ namespace Ryujinx.Graphics.Texture
             }
             else
             {
-                cpuMemory = (MemoryManager)memory;
+                cpuMemory = (MemoryManager) memory;
             }
 
             ISwizzle swizzle = TextureHelper.GetSwizzle(image);
 
             ImageDescriptor desc = GetImageDescriptor(image.Format);
 
-            (int width, int height, int depth) = GetImageSizeInBlocks(image);
-
+            (int, int, int)[] dimensions = GetImageSizesInBlocks(image);
+            
             int bytesPerPixel = desc.BytesPerPixel;
 
-            //Note: Each row of the texture needs to be aligned to 4 bytes.
-            int pitch = (width * bytesPerPixel + 3) & ~3;
+            int targetMipLevel = image.MaxMipmapLevel <= 1 ? 1 : image.MaxMipmapLevel;
+            int[] mipOffsets = swizzle.GetMipOffsets(targetMipLevel);
 
+            // Initalise data arrays
+            byte[][] data = new byte[targetMipLevel][];
+            int[] pitches = new int[targetMipLevel];
+            int[] sizes = new int[targetMipLevel];
 
-            int dataLayerSize = height * pitch * depth;
-            byte[] data = new byte[dataLayerSize * image.LayerCount];
+            for (int i = 0; i < targetMipLevel; i++)
+            {
+                //Note: Each row of the texture needs to be aligned to 4 bytes.
+                pitches[i] = (dimensions[i].Item1 * bytesPerPixel + 3) & ~3;
+                sizes[i] = dimensions[i].Item2 * pitches[i] * dimensions[i].Item3;
 
-            int targetMipLevel = image.MaxMipmapLevel <= 1 ? 1 : image.MaxMipmapLevel - 1;
-            int layerOffset = GetLayerOffset(image, targetMipLevel);
+                data[i] = new byte[sizes[i] * image.LayerCount];
+            }
 
             for (int layer = 0; layer < image.LayerCount; layer++)
             {
-                for (int z = 0; z < depth; z++)
+                for (int level = 0; level < targetMipLevel; level++)
                 {
-                    for (int y = 0; y < height; y++)
+                    swizzle.SetMipLevel(level);
+
+                    int width = dimensions[level].Item1;
+                    int height = dimensions[level].Item2;
+                    int depth = dimensions[level].Item3;
+
+
+                    for (int z = 0; z < depth; z++)
                     {
-                        int outOffs = (dataLayerSize * layer) + y * pitch + (z * width * height * bytesPerPixel);
-
-                        for (int x = 0; x < width; x++)
+                        for (int y = 0; y < height; y++)
                         {
-                            long offset = (uint)swizzle.GetSwizzleOffset(x, y, z);
+                            int outOffs = (sizes[level] * layer) + y * pitches[level] + (z * width * height * bytesPerPixel);
 
-                            cpuMemory.ReadBytes(position + (layerOffset * layer) + offset, data, outOffs, bytesPerPixel);
+                            for (int x = 0; x < width; x++)
+                            {
+                                long offset = (uint) swizzle.GetSwizzleOffset(x, y, z);
 
-                            outOffs += bytesPerPixel;
+                                cpuMemory.ReadBytes(position + (image.LayerStride * layer) + offset, data[level], outOffs, bytesPerPixel);
+
+                                outOffs += bytesPerPixel;
+                            }
                         }
                     }
                 }
@@ -287,15 +307,16 @@ namespace Ryujinx.Graphics.Texture
 
             ImageDescriptor desc = GetImageDescriptor(image.Format);
 
-            (int width, int height, int depth) = GetImageSizeInBlocks(image);
+            (int, int, int)[] sizes = GetImageSizesInBlocks(image);
 
             int bytesPerPixel = desc.BytesPerPixel;
 
             int inOffs = 0;
 
-            for (int z = 0; z < depth; z++)
-            for (int y = 0; y < height; y++)
-            for (int x = 0; x < width;  x++)
+            // TODO: Support mipmaps
+            for (int z = 0; z < sizes[0].Item1; z++)
+            for (int y = 0; y < sizes[0].Item2; y++)
+            for (int x = 0; x < sizes[0].Item3; x++)
             {
                 long offset = (uint)swizzle.GetSwizzleOffset(x, y, z);
 
@@ -345,30 +366,124 @@ namespace Ryujinx.Graphics.Texture
             return true;
         }
 
+        public static int GetLayerStride(GalImage image)
+        {
+            int stride = TextureHelper.GetSwizzle(image).GetMipOffset(image.MaxMipmapLevel);
+
+            // TODO: Should this align cubemaps. If so it should be islayered rather than isarray
+            if (IsArray(image.TextureTarget) && image.Layout == GalMemoryLayout.BlockLinear)
+            {
+                // GOBSize constant. Calculated by 64 bytes in x multiplied by 8 y coords, represents
+                // an small rect of (64/bytes_per_pixel)X8.
+                stride = BitUtils.AlignUp(stride, 512 * image.GobBlockHeight * image.GobBlockDepth);
+            }
+
+            return stride;
+        }
+
         public static int GetSize(GalImage image)
         {
-            ImageDescriptor desc = GetImageDescriptor(image.Format);
+            return GetLayerStride(image) * image.LayerCount;
+        }
 
-            int componentCount = GetCoordsCountTextureTarget(image.TextureTarget);
+        public static (int, int, int)[] GetMipmapDimensions(GalImage image)
+        {
+            (int, int, int)[] dimensions = new (int, int, int)[image.MaxMipmapLevel];
 
-            if (IsArray(image.TextureTarget))
-                componentCount--;
+            int w = image.Width;
+            int h = image.Height;
+            int d = image.Depth;
 
-            int width  = DivRoundUp(image.Width,  desc.BlockWidth);
-            int height = DivRoundUp(image.Height, desc.BlockHeight);
-            int depth  = DivRoundUp(image.Depth,  desc.BlockDepth);
+            dimensions[0] = (w, h, d);
 
-            switch (componentCount)
+            for (int i = 1; i < image.MaxMipmapLevel; i++)
             {
-                case 1:
-                    return desc.BytesPerPixel * width * image.LayerCount;
-                case 2:
-                    return desc.BytesPerPixel * width * height * image.LayerCount;
-                case 3:
-                    return desc.BytesPerPixel * width * height * depth * image.LayerCount;
-                default:
-                    throw new InvalidOperationException($"Invalid component count: {componentCount}");
+                w = Math.Max(1, w >> 1);
+                h = Math.Max(1, h >> 1);
+                d = Math.Max(1, d >> 1);
+                dimensions[i] = (w, h, d);
             }
+
+            return dimensions;
+        }
+
+        public static TextureMapHandle[] GetMap(GalImage image)
+        {
+            int mipLevel = (image.MaxMipmapLevel == 0) ? 1 : image.MaxMipmapLevel;
+
+            TextureMapHandle[] map = new TextureMapHandle[image.LayerCount * mipLevel];
+
+            int[] mipOffsets = TextureHelper.GetSwizzle(image).GetMipOffsets(mipLevel);
+
+            for (int layer = 0; layer < image.LayerCount; layer++)
+            {
+                for (int level = 0; level < mipLevel; level++)
+                {
+                    TextureMapHandle mapHandle = new TextureMapHandle()
+                    {
+                        Position = ((image.LayerStride) * layer) + mipOffsets[level],
+                        Size = mipOffsets[level + 1] - mipOffsets[level],
+                        Image = null,
+                        Layer = layer,
+                        Level = level,
+                    };
+
+                    map[layer * mipLevel + level] = mapHandle;
+                }
+            }
+
+            return map;
+        }
+
+        public static int[] GetMapIndex(TextureMapHandle[] map, long position, long size, long parentSize)
+        {
+            List<int> indexes = new List<int>();
+            long end = position + size;
+
+            for (int mapIndex = 0; mapIndex < map.Length; mapIndex++)
+            {
+                if (indexes.Count == 0)
+                {
+                    if (map[mapIndex].Position == position)
+                    {
+                        // Perfect match
+                        if (map[mapIndex].Size == size)
+                        {
+                            return new[] {mapIndex};
+                        }
+
+                        indexes.Add(mapIndex);
+                    }
+                }
+                else
+                {
+                    if (map[mapIndex].Position == end)
+                    {
+                        return indexes.ToArray();
+                    }
+
+                    if (map[mapIndex].Position < end)
+                    {
+                        indexes.Add(mapIndex);
+                    }
+                    else
+                    {
+                        break;
+                    }
+
+                    if (map[mapIndex].Position + map[mapIndex].Size == end)
+                    {
+                        return indexes.ToArray();
+                    }
+                }
+            }
+
+            if (parentSize == end)
+            {
+                return indexes.ToArray();
+            }
+            
+            return new int[0];
         }
 
         public static int GetGpuSize(GalImage image, bool forcePitch = false)
@@ -430,13 +545,20 @@ namespace Ryujinx.Graphics.Texture
             return (image.Width + alignMask) & ~alignMask;
         }
 
-        public static (int Width, int Height, int Depth) GetImageSizeInBlocks(GalImage image)
+        public static (int Width, int Height, int Depth)[] GetImageSizesInBlocks(GalImage image)
         {
             ImageDescriptor desc = GetImageDescriptor(image.Format);
 
-            return (DivRoundUp(image.Width,  desc.BlockWidth),
-                    DivRoundUp(image.Height, desc.BlockHeight),
-                    DivRoundUp(image.Depth, desc.BlockDepth));
+            (int, int, int)[] sizes = ImageUtils.GetMipmapDimensions(image);
+
+            for (int s = 0; s < sizes.Length; s++)
+            {
+                sizes[s] = (DivRoundUp(sizes[s].Item1, desc.BlockWidth),
+                            DivRoundUp(sizes[s].Item2, desc.BlockHeight),
+                            DivRoundUp(sizes[s].Item3, desc.BlockDepth));
+            }
+
+            return sizes;
         }
 
         public static int GetBytesPerPixel(GalImageFormat format)
@@ -471,7 +593,7 @@ namespace Ryujinx.Graphics.Texture
             return (desc.BlockWidth | desc.BlockHeight) != 1;
         }
 
-        private static ImageDescriptor GetImageDescriptor(GalImageFormat format)
+        public static ImageDescriptor GetImageDescriptor(GalImageFormat format)
         {
             GalImageFormat pixelFormat = format & GalImageFormat.FormatMask;
 
@@ -529,6 +651,20 @@ namespace Ryujinx.Graphics.Texture
             {
                 case GalTextureTarget.OneDArray:
                 case GalTextureTarget.TwoDArray:
+                case GalTextureTarget.CubeArray:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        public static bool IsLayered(GalTextureTarget textureTarget)
+        {
+            switch (textureTarget)
+            {
+                case GalTextureTarget.OneDArray:
+                case GalTextureTarget.TwoDArray:
+                case GalTextureTarget.CubeMap:
                 case GalTextureTarget.CubeArray:
                     return true;
                 default:

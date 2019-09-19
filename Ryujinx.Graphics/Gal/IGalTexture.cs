@@ -1,3 +1,5 @@
+using Ryujinx.Graphics.Gal.OpenGL;
+
 namespace Ryujinx.Graphics.Gal
 {
     public interface IGalTexture
@@ -5,13 +7,11 @@ namespace Ryujinx.Graphics.Gal
         void LockCache();
         void UnlockCache();
 
-        void Create(long key, int size, GalImage image);
+        ImageHandler Create(TextureKey key, byte[][] data, GalImage image);
 
-        void Create(long key, byte[] data, GalImage image);
+        bool TryGetImageHandler(TextureKey key, out ImageHandler cachedImage);
 
-        bool TryGetImage(long key, out GalImage image);
-
-        void Bind(long key, int index, GalImage image);
+        void Bind(int index, ImageHandler image);
 
         void SetSampler(GalImage image, GalTextureSampler sampler);
     }

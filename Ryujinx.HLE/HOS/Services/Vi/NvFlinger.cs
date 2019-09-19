@@ -11,7 +11,8 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
-
+using Ryujinx.Graphics.Gal.OpenGL;
+using Ryujinx.Graphics.Texture;
 using static Ryujinx.HLE.HOS.Services.Android.Parcel;
 
 namespace Ryujinx.HLE.HOS.Services.Android
@@ -412,21 +413,25 @@ namespace Ryujinx.HLE.HOS.Services.Android
 
             _renderer.QueueAction(() =>
             {
-                if (!_renderer.Texture.TryGetImage(fbAddr, out GalImage image))
+                GalImage image = new GalImage(
+                    fbWidth,
+                    fbHeight, 1, 1, 1, BlockHeight, 1,
+                    GalMemoryLayout.BlockLinear,
+                    imageFormat,
+                    GalTextureTarget.TwoD);
+
+                TextureKey key = new TextureKey(fbAddr, image.Size, image.TextureTarget);
+
+                if (_renderer.Texture.TryGetImageHandler(key, out ImageHandler imageHandler))
                 {
-                    image = new GalImage(
-                        fbWidth,
-                        fbHeight, 1, 1, 1, BlockHeight, 1,
-                        GalMemoryLayout.BlockLinear,
-                        imageFormat,
-                        GalTextureTarget.TwoD);
+                    image = imageHandler.Image;
                 }
 
                 context.Device.Gpu.ResourceManager.ClearPbCache();
-                context.Device.Gpu.ResourceManager.SendTexture(vmm, fbAddr, image);
+                context.Device.Gpu.ResourceManager.SendTexture(vmm, key, image);
 
                 _renderer.RenderTarget.SetTransform(flipX, flipY, top, left, right, bottom);
-                _renderer.RenderTarget.Present(fbAddr);
+                _renderer.RenderTarget.Present(key);
 
                 ReleaseBuffer(slot);
             });

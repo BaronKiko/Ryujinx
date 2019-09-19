@@ -291,11 +291,34 @@ namespace Ryujinx.Graphics.Gal.OpenGL
             GalTextureFilter    minFilter,
             GalTextureMipFilter mipFilter)
         {
-            //TODO: Mip (needs mipmap support first).
-            switch (minFilter)
+            switch (mipFilter)
             {
-                case GalTextureFilter.Nearest: return TextureMinFilter.Nearest;
-                case GalTextureFilter.Linear:  return TextureMinFilter.Linear;
+                case GalTextureMipFilter.None:
+                    switch (minFilter)
+                    {
+                        case GalTextureFilter.Nearest: return TextureMinFilter.Nearest;
+                        case GalTextureFilter.Linear: return TextureMinFilter.Linear;
+                    }
+
+                    break;
+
+                case GalTextureMipFilter.Linear:
+                    switch (minFilter)
+                    {
+                        case GalTextureFilter.Nearest: return TextureMinFilter.NearestMipmapLinear;
+                        case GalTextureFilter.Linear: return TextureMinFilter.LinearMipmapLinear;
+                    }
+
+                    break;
+
+                case GalTextureMipFilter.Nearest:
+                    switch (minFilter)
+                    {
+                        case GalTextureFilter.Nearest: return TextureMinFilter.NearestMipmapNearest;
+                        case GalTextureFilter.Linear: return TextureMinFilter.LinearMipmapNearest;
+                    }
+
+                    break;
             }
 
             throw new ArgumentException(nameof(minFilter) + " \"" + minFilter + "\" is not valid!");
